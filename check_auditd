@@ -1,25 +1,47 @@
 #!/usr/bin/env bash
+usage () {
+echo "
+Usage: $1 [OPTION]
+    -h,--help       show this message
+    -v,--verbose    show metrics more verbosely in a list
+    -t,--timeframe  passed on to aureport one of now, recent, today, yesterday, this-week, week-ago, this-month, this-year,
+                    defaults to 'recent' which is 10 minutes ago. This should be larger than nagios check interval
+    -a,--auargs     extra arguments passed on to aureport
+    -f,--file       file used to store metrics, defaults to /tmp/.checkreport
+    --[a-zA-Z]      Double dash options containing a key from the output of '$1 -v'
+                    preceded by comma separated list [warn],[crit],[min],[max]
+Example:
+    $1 --failedlogins=2,1,0,10 --logins=200,300,0,1000 -v
+    To only use failed events
+    $1 -a '--failed' --failedlogins=2,1,0,10 --failedauthentications=10,14,0 -v
 
+Setup:
+    add following to /etc/sudoers
+        
+"
+}
+
+# declare array to keep commandline values in
 declare -A opthash=();
 while true
 do
     case "${1}" in
-        -h|--help)    echo "TODO:"; exit 0;;
-        -d|--debug) DEBUG=1; shift; continue;;
-        -t|--timeframe) timeframe=${1:-today}; shift; continue;;
-        -a|--auargs) auargs=${1}; shift; continue;;
+        -h|--help)    usage "$0"; exit 3;;
+        -v|--verbose) VERBOSE=1; shift; continue;;
+        -t|--timeframe) timeframe=${2:-today}; shift 2; continue;;
+        -a|--auargs) auargs="${2}"; shift 2; continue;;
         -f|--file)
             [[ ! "$2" =~ ^- ]] && FILE=${2:-/tmp/.checkreport}
             shift 2; continue ;;
         --[a-zA-Z][a-zA-Z=]*) # dynamically grab long-options saving opt as hash key and arg as its value
             opt="${1#*--}"
             if [[ ! "$2" =~ ^- ]] ; then
-                opthash[$opt]="${2//[^0-9c]/\;}"
+                opthash[$opt]="${2//[^0-9c]/\:}"
                 shift 2; continue
             elif [[ "$2" =~ ^- ]] ; then
                 value="${opt#*=}"
-                opthash[${opt%%=*}]="${value//[^0-9c]/\;}"
-                shift 1
+                opthash[${opt%%=*}]="${value//[^0-9c]/\:}"
+                shift 1; continue
             fi
             ;;
         --|*) # everything else, end of input reading
@@ -27,42 +49,60 @@ do
     esac
 done
 
-[[ -n $DEBUG ]] && for key in "${!opthash[@]}"; do
-    echo key: "$key"
-    echo value: "${opthash[$key]}"
-done
 FILE=${FILE:-/tmp/.checkreport}
+OK='OK -'
+CRITICAL='CRITICAL -'
+WARN='WARN -'
+UNKNOWN='UNKNOWN -'
+STATUS="$OK"
+# Plugin return code
+CODE=0
 
-if ! test -f "$FILE" ;then
-    touch "${FILE}"
-    chmod 0600 "${FILE}"
+
+if [[ ! -f "$FILE" ]] ;then
+    touch "${FILE}" && chmod 0600 "${FILE}"
+    [[ $? -gt 0  ]] && { echo "$UNKNOWN could not create $FILE" ; exit 3; }
 fi
 
+# timeframe passed to aureport
 timeframe=${timeframe:-today}
-declare -A aurray=();
 
+# read values from previos session into hash "aurray"
+declare -A aurray=();
 while read -r key value; do
     aurray["$key"]="$value";
 done < "${FILE}"
 
 declare -A deltaray=();
-
-# print header for DEBUG
-[[ -n $DEBUG ]] && DEBUG="key\told\tcurrent\tdelta\n"
+# print header for VERBOSE
+[[ -n $VERBOSE ]] && VERBOSE="key\tprevious\tcurrent\tdelta\twarn\tcritical\tmin\tmax\n"
 while read -r key value; do
-        deltaray["$key"]=$(( $value - ${aurray["$key"]:-0} ))
-
-        [[ ${deltaray["$key"]} -gt 0 ]] && export metrics="${metrics} $key=${deltaray[$key]};"
-        [[ -n $DEBUG ]] && export DEBUG="${debug}${key}\t${aurray[$key]}\t${value}\t${deltaray[$key]}\n"
+        delta=$(( $value - ${aurray["$key"]:-0} ))
+        deltaray["$key"]=$delta
+        sign=''
+        IFS=':' read -r warn critical min max <<< "${opthash[$key]}"
+        if [[ -n $critical && $delta -ge $critical  ]] ; then
+            STATUS="$CRITICAL"
+            CODE=2
+            sign='!!'
+        elif [[ -n $warn && "$STATUS" != "$CRITICAL" && $delta -ge $warn ]] ; then
+            STATUS="$WARN"
+            CODE=1
+            sign='!'
+        fi # use pnp4nagios UoM
+        [[ $delta -gt 0 ]] && export metrics="${metrics} $key=$delta;$warn;$critical;$min;$max;"
+        [[ $delta -gt 0 ]] && export shortmetrics="${shortmetrics} $key=${delta}${sign}"
+        [[ -n $VERBOSE ]] && export VERBOSE="${VERBOSE}${key}\t${aurray[$key]}\t${value}\t${delta}\t$warn\t$critical\t$min\t$max\n"
     done <<< "$( aureport --summary -i -ts "${timeframe}" ${auargs} | awk -v'FS=: ' '
         /^Number of/ { nr=$2;
             gsub(/(Number of )|\W|[0-9]/," ",$0);
             gsub(/\s+/,"",$0);
-            print $1,nr}' | tee /tmp/.checkreport)"
+            print $1,nr}' | tee "${FILE}" )"
 
-#echo ${!newrray[@]}
-
-echo "$metrics"
-[[ -n ${debug} ]] && printf  "$debug" | column -t
+metrics="$(echo $metrics | tr -s ';')"
+echo "${STATUS}$shortmetrics"
+[[ -n ${VERBOSE} ]] && echo -e "$VERBOSE" | column -t
+echo "|${metrics}"
+exit $CODE
 
 
