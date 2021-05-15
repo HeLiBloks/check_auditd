@@ -1,55 +1,121 @@
 #!/usr/bin/env bash
+# Nagios plugin for auditd
+# Copyright © 2021 henrik lindgren <henrikprojekt at gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Check for anomaly's, failed logins, systemcalls and more return the data suitable for pnp4nagios
+#
+# tested on Centos7,8, Fedora33
+
+
 usage () {
-echo "
+echo " Disclamer:
+    This plugin will if used incorrectly reveal human readable passwords of human and system users and distribute them in your network.
+    Please make sure you have a throughout understanding of auditd and its implementation before using this plugin.
+
 Usage: $1 [OPTION]
-    -h,--help       show this message
-    -v,--verbose    show metrics more verbosely in a list
-    -t,--timeframe  passed on to aureport one of now, recent, today, yesterday, this-week, week-ago, this-month, this-year,
+    -t,--timeframe  passed on to aureport one of now, recent, today, yesterday, this-week, week-ago, this-month, this-year or a date
                     defaults to 'recent' which is 10 minutes ago. This should be larger than nagios check interval
+    -n,--nometrics  dissable mectrics in output
+    -v,--verbose    show metrics more verbosely in a list
     -a,--auargs     extra arguments passed on to aureport
     -f,--file       file used to store metrics, defaults to /tmp/.checkreport
     --[a-zA-Z]      Double dash options containing a key from the output of '$1 -v'
                     preceded by comma separated list [warn],[crit],[min],[max]
-Example:
+    -w,--warn       global fallback value to use if [warn] is not defined
+    -c,--critical   global fallback value to use if [crit] is not defined
+    -s,--skipp      comma-separated list of items to skipp
+    -h,--help       show this message
+
+Examples:
     $1 --failedlogins=2,1,0,10 --logins=200,300,0,1000 -v
-    To only use failed events
-    $1 -a '--failed' --failedlogins=2,1,0,10 --failedauthentications=10,14,0 -v
+    To only return failed events
+    $1 -a '--failed' --failedlogins=2,1,0,10 --failedauthentications=10,14,0 -v --skipp=faileddogs,failedhounds
+    Show passwords for users that attempted to login with their username set to their password (on older systems)
+    and usernames of failed login attempts
+    $1 -a '--auth --failed' -v -n
+    Return failed commands, this will break rrdtool use '-n'!!
+    $1 -a '--comm --failed' -v -n
+    Return failed systemcalls
+    $1 -a '-s --failed' -v -n
 
 Setup:
     add following to /etc/sudoers
-        
+        nagios ALL=(root:ALL) NOPASSWD:$0
 "
+}
+
+echoerror() {
+    _COLORS=${BS_COLORS:-$(tput colors 2>/dev/null || echo 0)}
+    # shellcheck disable=SC2181
+    if [ $? -eq 0 ] && [ "$_COLORS" -gt 2 ]; then
+        RC='\033[1;31m'
+        GC='\033[1;32m'
+        BC='\033[1;34m'
+        YC='\033[1;33m'
+        EC='\033[0m'
+    else
+        RC=""
+       export GC=""
+       export BC=""
+       export YC=""
+       export EC=""
+    fi
+    printf "${RC} * ERROR${EC}: %s %s\\n" "$$" "$@" 1>&2;
 }
 
 # declare array to keep commandline values in
 declare -A opthash=();
-while true
+# ensure that we dont loop infinitly
+guard=30
+while [[ $guard -gt 0 ]]
 do
+    ((guard-=1))
     case "${1}" in
-        -h|--help)    usage "$0"; exit 3;;
-        -v|--verbose) VERBOSE=1; shift; continue;;
-        -t|--timeframe) timeframe=${2:-today}; shift 2; continue;;
-        -a|--auargs) auargs="${2}"; shift 2; continue;;
+        -h|--help)      usage "$0"              ; exit 3  ;;
+        -v|--verbose)   VERBOSE=1               ; shift   ; continue ;;
+        -d|--debug)     DEBUG=1                 ; shift   ; continue ;;
+        -n|--nometrics) NOMETRICS=1             ; shift   ; continue ;;
+        -t|--timeframe) timeframe=${2:-recent}   ; shift 2 ; continue ;;
+        -a|--auargs)    auargs="${2}"           ; shift 2 ; continue ;;
+        -s|--skipp)     skipp="${2//[^a-zA-Z0-9_-]/ }"           ; shift 2 ; continue ;;
+        -A|--ausearchargs) AUSEARCHARGS="/usr/bin/ausearch ${2}|" ; shift 2 ; continue ;;
+        -w|--warning)   fallback_warning="${2}"          ; shift 2 ; continue ;;
+        -c|--critical)  fallback_critical="${2}"         ; shift 2 ; continue ;;
+        -m|--min)       min="${2}"              ; shift 2 ; continue ;;
+        -M|--max)       max="${2}"              ; shift 2 ; continue ;;
         -f|--file)
             [[ ! "$2" =~ ^- ]] && FILE=${2:-/tmp/.checkreport}
             shift 2; continue ;;
         --[a-zA-Z][a-zA-Z=]*) # dynamically grab long-options saving opt as hash key and arg as its value
             opt="${1#*--}"
             if [[ ! "$2" =~ ^- ]] ; then
-                opthash[$opt]="${2//[^0-9c]/\:}"
+                opthash[$opt]="${2//[^0-9csBuTMKGm%.]/,}"
                 shift 2; continue
             elif [[ "$2" =~ ^- ]] ; then
                 value="${opt#*=}"
-                opthash[${opt%%=*}]="${value//[^0-9c]/\:}"
+                opthash[${opt%%=*}]="${value//[^0-9csBuTMKGm%.]/,}"
                 shift 1; continue
             fi
             ;;
-        --|*) # everything else, end of input reading
+        *) # everything else, end of input reading
             shift; break ;;
     esac
 done
 
-FILE=${FILE:-/tmp/.checkreport}
+DEBUG=1
 OK='OK -'
 CRITICAL='CRITICAL -'
 WARN='WARN -'
@@ -57,52 +123,81 @@ UNKNOWN='UNKNOWN -'
 STATUS="$OK"
 # Plugin return code
 CODE=0
+# timeframe passed to aureport
+timeframe=${timeframe:-recent}
+# file to save metrics
+FILE=${FILE:-/tmp/.checkreport}
+AUBIN='/usr/sbin/aureport'
+AUSEARCH='/usr/sbin/ausearch'
 
-
-if [[ ! -f "$FILE" ]] ;then
-    touch "${FILE}" && chmod 0600 "${FILE}"
-    [[ $? -gt 0  ]] && { echo "$UNKNOWN could not create $FILE" ; exit 3; }
+if [[ ! -f "$FILE" && ! -w "$FILE" ]] ;then
+    touch "${FILE}" &>/dev/null
+    if ! chmod 0600 "${FILE}" &>/dev/null ; then
+        echo "$UNKNOWN could not create $FILE"
+        exit 3
+    fi
 fi
 
-# timeframe passed to aureport
-timeframe=${timeframe:-today}
-
-# read values from previos session into hash "aurray"
+# read values from previos session, from FILE into hash "aurray"
 declare -A aurray=();
 while read -r key value; do
     aurray["$key"]="$value";
 done < "${FILE}"
 
-declare -A deltaray=();
-# print header for VERBOSE
-[[ -n $VERBOSE ]] && VERBOSE="key\tprevious\tcurrent\tdelta\twarn\tcritical\tmin\tmax\n"
+# header for VERBOSE metrics
+[[ -n $VERBOSE ]] && VERBOSE='\nkey\tprevious\tcurrent\tdelta\twarn\tcritical\tmin\tmax\n'
+
+#declare -A deltaray=();
+# save output of aureport to $AUREPORT and write it to FILE
+# shellcheck disable=2086 # use wordsplitting as a feature
+AUREPORT="$( ${AUSEARCH} --raw -ts "${timeframe}" ${AUSEARCHARGS} | $AUBIN --summary -i ${auargs} | awk -v'FS=: ' '
+     /^[0-9]/ && /[0-9a-zA-Z]$/ {split($0,values,/\s+/);
+        print values[2],values[1]  }
+    /^Number of/ { nr=$2; FS=": "
+        gsub(/(Number of )|\W|[0-9]/," ",$0);
+        gsub(/\s+/,"",$0);
+        print $1,nr}
+    END {print "dummy",0}' | tee "${FILE}" )"
+
+
+declare -a pipearray=${PIPESTATUS[0]}
+[[ -n $DEBUG ]] && if [[ ${pipearray[0]}  -gt 0 ]]; then
+    echoerror "$AUBIN returned status ${pipearray[0]}"
+elif [[ ${pipearray[1]} -gt 1 ]];then
+    echoerror "awk returned status ${pipearray[1]}"
+elif [[ ${pipearray[2]} -gt 1 ]];then
+    echoerror "tee returned status ${pipearray[2]}"
+fi
+
+# read key value pairs separated by space one line at a time
 while read -r key value; do
-        delta=$(( $value - ${aurray["$key"]:-0} ))
-        deltaray["$key"]=$delta
-        sign=''
-        IFS=':' read -r warn critical min max <<< "${opthash[$key]}"
-        if [[ -n $critical && $delta -ge $critical  ]] ; then
-            STATUS="$CRITICAL"
-            CODE=2
-            sign='!!'
-        elif [[ -n $warn && "$STATUS" != "$CRITICAL" && $delta -ge $warn ]] ; then
-            STATUS="$WARN"
-            CODE=1
-            sign='!'
-        fi # use pnp4nagios UoM
-        [[ $delta -gt 0 ]] && export metrics="${metrics} $key=$delta;$warn;$critical;$min;$max;"
-        [[ $delta -gt 0 ]] && export shortmetrics="${shortmetrics} $key=${delta}${sign}"
-        [[ -n $VERBOSE ]] && export VERBOSE="${VERBOSE}${key}\t${aurray[$key]}\t${value}\t${delta}\t$warn\t$critical\t$min\t$max\n"
-    done <<< "$( aureport --summary -i -ts "${timeframe}" ${auargs} | awk -v'FS=: ' '
-        /^Number of/ { nr=$2;
-            gsub(/(Number of )|\W|[0-9]/," ",$0);
-            gsub(/\s+/,"",$0);
-            print $1,nr}' | tee "${FILE}" )"
+    # shellcheck disable=2199 disable=2076
+    [[ $key == 'dummy' || " ${skipp[@]} " =~ " $key "  ]] && continue # avoid fail if input is empty
+    delta=$(( value - ${aurray["$key"]:-0} ))
+    #deltaray["$key"]=$delta
+    sign=''
+    IFS=',' read -r warn critical min max <<< "${opthash[$key]}"
+    if [[ -n $critical && $delta -ge ${critical:-$fallback_critical}  ]] ; then
+        STATUS="$CRITICAL"
+        CODE=2
+        sign='!!' # prepend critical metrics with !!
+    elif [[ -n $warn && $CODE -ne 2 && $delta -ge ${warn:-$fallback_warning} ]] ; then
+        STATUS="$WARN"
+        CODE=1
+        sign='!' # prepend warning metrics with !
+    elif [[ -z $delta || $delta -lt 0 ]] ; then
+        STATUS="$UNKNOWN metric out of bounds: "
+        delta='null'
+        CODE=3
+        sign='?' # prepend to not sane metrics
+    fi
+    export metrics="${metrics} $key=$delta;$warn;$critical;$min;$max" # use pnp4nagios UoM
+    [[ $delta -gt 0 ]] && export shortmetrics="${shortmetrics} $key=${delta}${sign}"
+    [[ -n $VERBOSE ]]  && export VERBOSE="${VERBOSE}${key}\t${aurray[$key]}\t${value}\t${delta}\t$warn\t$critical\t$min\t$max\n"
+done <<< "${AUREPORT}"
 
-metrics="$(echo $metrics | tr -s ';')"
-echo "${STATUS}$shortmetrics"
-[[ -n ${VERBOSE} ]] && echo -e "$VERBOSE" | column -t
-echo "|${metrics}"
-exit $CODE
-
+echo -n "${STATUS}$shortmetrics"
+[[ -n ${VERBOSE} ]] && { echo ; echo -ne "$VERBOSE" | column -t ; }
+[[  -z ${NOMETRICS} ]] && echo " | $metrics" | tr -s ';'
+exit ${CODE}
 
