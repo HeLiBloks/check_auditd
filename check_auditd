@@ -21,39 +21,53 @@
 
 
 usage () {
-echo " Disclamer:
-    This plugin will if used incorrectly reveal human readable passwords of human and system users and distribute them in your network.
+    echo " Disclamer:
+    Beware this plugin allows injection of shell code by design!
     Please make sure you have a throughout understanding of auditd and its implementation before using this plugin.
 
 Usage: $1 [OPTION]
-    -t,--timeframe  passed on to aureport one of now, recent, today, yesterday, this-week, week-ago, this-month, this-year or a date
-                    defaults to 'recent' which is 10 minutes ago. This should be larger than nagios check interval
-    -n,--nometrics  dissable mectrics in output
-    -v,--verbose    show metrics more verbosely in a list
-    -a,--auargs     extra arguments passed on to aureport
-    -f,--file       file used to store metrics, defaults to /tmp/.checkreport
-    --[a-zA-Z]      Double dash options containing a key from the output of '$1 -v'
-                    preceded by comma separated list [warn],[crit],[min],[max]
-    -w,--warn       global fallback value to use if [warn] is not defined
-    -c,--critical   global fallback value to use if [crit] is not defined
-    -s,--skipp      comma-separated list of items to skipp
-    -h,--help       show this message
+    -a,--auargs <arg1,arg2,...>     Extra arguments passed on to aureport
+    -A,--ausargs <arg1,arg2,...>    Extra arguments passed on to ausearch
+    -F,--checkpoint <file>          File used to store audit checkpoint, defaults to /tmp/.checkpoint
+    --[a-zA-Z]=<warn,crit,min,max>  Options containing a key from the output of '$1 -v'
+                                        preceded by comma separated list [warn],[crit],[min],[max]
+    -w,--warn <int>                 Global fall-back value to use if [warn] is not defined
+    -c,--critical <int>             Global fall-back value to use if [crit] is not defined
+    -s,--ignore <metric1,metric2,..>   comma-separated list of items or bash-regex to ignore
+    -n,--nometrics                     disable metrics in output, useful if not using pnp4nagios
+    -C,--nocheckpoint [<day time>]  Do not create checkpoint file, instead use <day time>,
+                                    useful for debugging, see 'man ausearch -ts' for time format, defaults to 'recent'
+    -x,--maxcheckpointage <int>     Max age in seconds after wich checkpoint file is overriden with <int> in seconds.
+                                    this value should be somewhat larger than nagios check_interval, defaults to 800 seconds
+    -v,--verbose                    Show metrics more verbosely in a list
+    -h,--help                       Show this message
 
 Examples:
-    $1 --failedlogins=2,1,0,10 --logins=200,300,0,1000 -v
+    Logins and failed logins
+        $1 --failedlogins=2,1,0,10 --logins=200,300,0,1000 -v
     To only return failed events
-    $1 -a '--failed' --failedlogins=2,1,0,10 --failedauthentications=10,14,0 -v --skipp=faileddogs,failedhounds
+        $1 -a '--failed' --failedlogins=2,1,0,10 --failedauthentications=10,14,0 -v --ignore faileddogs,failedhounds
     Show passwords for users that attempted to login with their username set to their password (on older systems)
     and usernames of failed login attempts
-    $1 -a '--auth --failed' -v -n
-    Return failed commands, this will break rrdtool use '-n'!!
-    $1 -a '--comm --failed' -v -n
+        $1 -a '--auth --failed' -v -n
+    Return failed commands, this might break rrdtool use '-n'!!
+        $1 -a '--comm --failed' -A '-x ' -v -n
     Return failed systemcalls
-    $1 -a '-s --failed' -v -n
+        $1 -a '-s --failed' -v -n
 
 Setup:
-    add following to /etc/sudoers
+    add following to /etc/sudoers or /etc/sudoers.d/nagios
         nagios ALL=(root:ALL) NOPASSWD:$0
+
+Nagios service if using check_by_ssh:
+    define service {
+        use                     local-service
+        service_description     auditd
+        hostgroup_name          linux-servers# aureport has a feature that makes it require ampersand,& for ssh
+        check_command           check_by_ssh!/usr/bin/sudo \$USER1\$/check_auditd -v -a '--failed'   &!
+        check_interval          10
+        register                1
+    }
 "
 }
 
@@ -62,16 +76,10 @@ echoerror() {
     # shellcheck disable=SC2181
     if [ $? -eq 0 ] && [ "$_COLORS" -gt 2 ]; then
         RC='\033[1;31m'
-        GC='\033[1;32m'
-        BC='\033[1;34m'
-        YC='\033[1;33m'
         EC='\033[0m'
     else
-        RC=""
-       export GC=""
-       export BC=""
-       export YC=""
-       export EC=""
+       RC=""
+       EC=""
     fi
     printf "${RC} * ERROR${EC}: %s %s\\n" "$$" "$@" 1>&2;
 }
@@ -80,22 +88,26 @@ echoerror() {
 declare -A opthash=();
 # ensure that we dont loop infinitly
 guard=30
+# remove equal signs from $@
+#@="${@//=/ }"
 while [[ $guard -gt 0 ]]
 do
     ((guard-=1))
     case "${1}" in
-        -h|--help)      usage "$0"              ; exit 3  ;;
-        -v|--verbose)   VERBOSE=1               ; shift   ; continue ;;
-        -d|--debug)     DEBUG=1                 ; shift   ; continue ;;
-        -n|--nometrics) NOMETRICS=1             ; shift   ; continue ;;
-        -t|--timeframe) timeframe=${2:-recent}   ; shift 2 ; continue ;;
-        -a|--auargs)    auargs="${2}"           ; shift 2 ; continue ;;
-        -s|--skipp)     skipp="${2//[^a-zA-Z0-9_-]/ }"           ; shift 2 ; continue ;;
-        -A|--ausearchargs) AUSEARCHARGS="/usr/bin/ausearch ${2}|" ; shift 2 ; continue ;;
-        -w|--warning)   fallback_warning="${2}"          ; shift 2 ; continue ;;
-        -c|--critical)  fallback_critical="${2}"         ; shift 2 ; continue ;;
-        -m|--min)       min="${2}"              ; shift 2 ; continue ;;
-        -M|--max)       max="${2}"              ; shift 2 ; continue ;;
+        -h|--help)      usage "$0"                                   ; exit 3  ;;
+        -v|--verbose)   VERBOSE=1                                    ; shift   ; continue ;;
+        -d|--debug)        DEBUG=1                                   ; shift   ; continue ;;
+        -n|--nometrics)    NOMETRICS=1                               ; shift   ; continue ;;
+        -a|--auargs)       auargs="${2}"                             ; shift 2 ; continue ;;
+        -A|--ausearchargs) AUSEARCHARGS="${2}"                       ; shift 2 ; continue ;;
+        -s|--ignore)     ignore="${2//,/ }"                          ; shift 2 ; continue ;;
+        -w|--warning)   fallback_warning="${2}"                      ; shift 2 ; continue ;;
+        -c|--critical)  fallback_critical="${2}"                     ; shift 2 ; continue ;;
+        -m|--min)       min="${2}"                                   ; shift 2 ; continue ;;
+        -M|--max)       max="${2}"                                   ; shift 2 ; continue ;;
+        -F|--checkpointfile) CHECKPOINTFILE="${2:-/tmp/.checkpoint}" ; shift 2 ; continue ;;
+        -x|--maxage)     MAXCHECKPOINTAGE="${2:-800}"             ; shift 2 ; continue ;;
+        -C|--nocheckpoint) NOCHECKPOINT="${2:-recent}"               ; shift 2 ; continue ;;
         -f|--file)
             [[ ! "$2" =~ ^- ]] && FILE=${2:-/tmp/.checkreport}
             shift 2; continue ;;
@@ -115,6 +127,7 @@ do
     esac
 done
 
+[[ -n $VERBOSE ]] && VERBOSE='\nkey\tvalue\twarn\tcritical\tmin\tmax\n'
 DEBUG=1
 OK='OK -'
 CRITICAL='CRITICAL -'
@@ -123,81 +136,103 @@ UNKNOWN='UNKNOWN -'
 STATUS="$OK"
 # Plugin return code
 CODE=0
-# timeframe passed to aureport
-timeframe=${timeframe:-recent}
 # file to save metrics
 FILE=${FILE:-/tmp/.checkreport}
 AUBIN='/usr/sbin/aureport'
-AUSEARCH='/usr/sbin/ausearch'
-
-if [[ ! -f "$FILE" && ! -w "$FILE" ]] ;then
-    touch "${FILE}" &>/dev/null
-    if ! chmod 0600 "${FILE}" &>/dev/null ; then
-        echo "$UNKNOWN could not create $FILE"
-        exit 3
+if [[ -z ${NOCHECKPOINT} ]] ; then
+    CHECKPOINTFILE=${CHECKPOINTFILE:-/tmp/.checkpoint}
+    test -w "${CHECKPOINTFILE}" && CHECKPOINTAGE=$(( $(date +%s) - $(awk -F'/[=:.]/' '/^output/{print $2}' "${CHECKPOINTFILE}") ))
+    if [[ ${CHECKPOINTAGE} -gt ${MAXCHECKPOINTAGE:-760} ]]; then
+        recent=$(( $(date +%s) - ${MAXCHECKPOINTAGE:-760} ))
+        # This might need fixing for different locales
+        recent=$( date +'%x %H:%M:%S' 2>/dev/null)
+        AUSEARCH="/usr/sbin/ausearch -ts ${recent:-recent} --checkpoint ${CHECKPOINTFILE}"
+    else
+        AUSEARCH="/usr/sbin/ausearch -ts checkpoint --checkpoint ${CHECKPOINTFILE}"
     fi
+else
+    AUSEARCH="/usr/sbin/ausearch -ts ${NOCHECKPOINT:-recent}"
 fi
 
-# read values from previos session, from FILE into hash "aurray"
-declare -A aurray=();
-while read -r key value; do
-    aurray["$key"]="$value";
-done < "${FILE}"
-
-# header for VERBOSE metrics
-[[ -n $VERBOSE ]] && VERBOSE='\nkey\tprevious\tcurrent\tdelta\twarn\tcritical\tmin\tmax\n'
-
-#declare -A deltaray=();
-# save output of aureport to $AUREPORT and write it to FILE
+# save output of aureport as newline delimited 'key value' pairs to $AUREPORT
 # shellcheck disable=2086 # use wordsplitting as a feature
-AUREPORT="$( ${AUSEARCH} --raw -ts "${timeframe}" ${AUSEARCHARGS} | $AUBIN --summary -i ${auargs} | awk -v'FS=: ' '
+AUREPORT="$( ${AUSEARCH} --raw ${AUSEARCHARGS} | $AUBIN --summary -i ${auargs} | awk -v'FS=: ' '
      /^[0-9]/ && /[0-9a-zA-Z]$/ {split($0,values,/\s+/);
         print values[2],values[1]  }
     /^Number of/ { nr=$2; FS=": "
         gsub(/(Number of )|\W|[0-9]/," ",$0);
         gsub(/\s+/,"",$0);
         print $1,nr}
-    END {print "dummy",0}' | tee "${FILE}" )"
-
+    END {print "dummy",0}' )"
 
 declare -a pipearray=${PIPESTATUS[0]}
 [[ -n $DEBUG ]] && if [[ ${pipearray[0]}  -gt 0 ]]; then
     echoerror "$AUBIN returned status ${pipearray[0]}"
-elif [[ ${pipearray[1]} -gt 1 ]];then
+elif [[ ${pipearray[1]} -gt 0 ]];then
     echoerror "awk returned status ${pipearray[1]}"
-elif [[ ${pipearray[2]} -gt 1 ]];then
-    echoerror "tee returned status ${pipearray[2]}"
+fi
+
+# TODO: add backlog, lost,...
+# auditctl -s | awk '/^(pid|lost|backlog|enabled|backlog_limit)\s/ {print $1,$2}' 
+# check nr of running audit rules
+running_rules=$( auditctl -l 2>/dev/null | wc -l )
+if [[ ${PIPESTATUS[0]} -eq 0 && $running_rules -gt 0 ]]; then
+    AUREPORT="running_rules ${running_rules}
+${AUREPORT}"
 fi
 
 # read key value pairs separated by space one line at a time
 while read -r key value; do
     # shellcheck disable=2199 disable=2076
-    [[ $key == 'dummy' || " ${skipp[@]} " =~ " $key "  ]] && continue # avoid fail if input is empty
-    delta=$(( value - ${aurray["$key"]:-0} ))
-    #deltaray["$key"]=$delta
+    [[ $key == 'dummy' || " ${ignore[@]} " =~ " $key "  ]] && continue # avoid fail if input is empty or in ignore list
     sign=''
     IFS=',' read -r warn critical min max <<< "${opthash[$key]}"
-    if [[ -n $critical && $delta -ge ${critical:-$fallback_critical}  ]] ; then
+
+    # TODO: move this out of the loop
+    if [[ $key == running_rules && $value -le 0 ]]; then
+        STATUS="$CRITICAL no running audit rules "
+        CODE=2
+        sign='!!'
+    fi
+
+    if [[ -n $critical && $value -ge ${critical:-$fallback_critical}  ]] ; then
         STATUS="$CRITICAL"
         CODE=2
         sign='!!' # prepend critical metrics with !!
-    elif [[ -n $warn && $CODE -ne 2 && $delta -ge ${warn:-$fallback_warning} ]] ; then
+    elif [[ -n $warn && $CODE -ne 2 && $value -ge ${warn:-$fallback_warning} ]] ; then
         STATUS="$WARN"
         CODE=1
         sign='!' # prepend warning metrics with !
-    elif [[ -z $delta || $delta -lt 0 ]] ; then
+    elif [[ -z $value || $value -lt 0 ]] ; then
         STATUS="$UNKNOWN metric out of bounds: "
-        delta='null'
+        value='null'
         CODE=3
         sign='?' # prepend to not sane metrics
     fi
-    export metrics="${metrics} $key=$delta;$warn;$critical;$min;$max" # use pnp4nagios UoM
-    [[ $delta -gt 0 ]] && export shortmetrics="${shortmetrics} $key=${delta}${sign}"
-    [[ -n $VERBOSE ]]  && export VERBOSE="${VERBOSE}${key}\t${aurray[$key]}\t${value}\t${delta}\t$warn\t$critical\t$min\t$max\n"
+
+    metrics="${metrics} $key=$value;$warn;$critical;$min;$max" # use pnp4nagios UoM
+    if [[ $sign =~ '!' ]] ; then
+        shortmetrics="$key=${value}${sign} ${shortmetrics}" # show after status OK - shortmetrics...
+    else
+        [[ $value -gt 0 ]] && shortmetrics="${shortmetrics} $key=${value}" # show after status OK - shortmetrics...
+    fi
+    [[ -n $VERBOSE ]]  && VERBOSE="${VERBOSE}${key}\t${value}\t$warn\t$critical\t$min\t$max\n"
 done <<< "${AUREPORT}"
 
+# check if audit daemon is running
+auditd_pid=$( auditctl -s 2>/dev/null | awk '/^pid\s/ {print $2}' )
+if [[ $auditd_pid -le 0 ]]; then
+    STATUS="$CRITICAL auditdaemon not running "
+    CODE=1
+fi
+
+# output: OK - metric=value ...
 echo -n "${STATUS}$shortmetrics"
-[[ -n ${VERBOSE} ]] && { echo ; echo -ne "$VERBOSE" | column -t ; }
+if [[ -n ${VERBOSE} ]]; then
+    echo ;
+    # sort by nr of events
+    echo -ne "$VERBOSE" | column -t | (read -r; printf "%s\n" "$REPLY"; sort -r -n -k 2)
+fi
 [[  -z ${NOMETRICS} ]] && echo " | $metrics" | tr -s ';'
 exit ${CODE}
 
