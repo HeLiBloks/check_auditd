@@ -86,19 +86,6 @@ Nagios service if using check_by_ssh:
 "
 }
 
-echoerror() {
-    _COLORS=${BS_COLORS:-$(tput colors 2>/dev/null || echo 0)}
-    # shellcheck disable=SC2181
-    if [ $? -eq 0 ] && [ "$_COLORS" -gt 2 ]; then
-        RC='\033[1;31m'
-        EC='\033[0m'
-    else
-       RC=""
-       EC=""
-    fi
-    printf "${RC} * ERROR${EC}: %s %s\\n" "$$" "$@" 1>&2;
-}
-
 # declare hash to keep commandline values in
 declare -A opthash=();
 # ensure that we dont loop infinitly
