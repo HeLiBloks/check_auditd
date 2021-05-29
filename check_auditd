@@ -111,7 +111,6 @@ do
     case "${1}" in
         -h|--help)           usage "$0"                              ; exit 3  ;;
         -v|--verbose)        VERBOSE=1                               ; shift   ; continue;;
-        -d|--debug)          DEBUG=1                                 ; shift   ; continue;;
         -n|--nometrics)      NOMETRICS=1                             ; shift   ; continue;;
         -a|--auargs)         auargs="${2}"                           ; shift 2 ; continue;;
         -A|--ausearchargs)   AUSEARCHARGS="${2}"                     ; shift 2 ; continue;;
@@ -143,7 +142,6 @@ do
 done
 
 [[ -n $VERBOSE ]] && VERBOSE='\nkey\tvalue\twarn\tcritical\tmin\tmax\n'
-DEBUG=1
 OK='OK - '
 CRITICAL='CRITICAL - '
 WARN='WARNING - '
