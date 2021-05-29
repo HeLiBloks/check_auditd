@@ -141,10 +141,15 @@ MAXCHECKPOINTAGE=${MAXCHECKPOINTAGE:-760}
 
 
 if [[ -f $CHECKPOINTFILE && -w $CHECKPOINTFILE && -z $NOCHECKPOINT ]] ; then
-    # if checkpointfile should be updated
+    # if checkpointfile is writable and should be updated
     CHECKPOINTAGE=$(( $(date +%s) - $(awk -F'[=:. ]' '/^output/{print $3}' "${CHECKPOINTFILE}" 2>/dev/null) ))
     if [[ ${CHECKPOINTAGE} -lt ${MAXCHECKPOINTAGE} ]]; then
         AUSEARCH="/usr/sbin/ausearch -ts checkpoint --checkpoint ${CHECKPOINTFILE}"
+    else
+        recent=$(( $(date +%s) - MAXCHECKPOINTAGE ))
+        # TODO: This might need fixing to support different locales
+        recent=$( date +'%x %H:%M:%S' -d @$recent 2>/dev/null)
+        AUSEARCH="/usr/sbin/ausearch -ts ${recent:-recent} --checkpoint ${CHECKPOINTFILE}"
     fi
 elif [[ ! -f $CHECKPOINTFILE && -z $NOCHECKPOINT ]]; then
     # if checkpointfile not exitst and should be created
@@ -175,7 +180,7 @@ AUREPORT="$( ${AUSEARCH} --raw ${AUSEARCHARGS} | $AUBIN --summary -i ${auargs} |
 
 austatus=$?
 if [[ $austatus -gt 0 ]]; then
-    AUSEARCH="ausearch --raw ${AUSEARCHARGS} | aureport --summary -i ${auargs} | awk ..."
+    AUSEARCH="ausearch --raw ${AUSEARCHARGS} \\| aureport --summary -i ${auargs} \\| awk ..."
     echo "$UNKNOWN '$AUSEARCH' returned status $austatus, check stderr, permissions and arguments passed to $0"
     exit 3
 fi
