@@ -31,6 +31,8 @@ xmltable(){
 }
 
 usage () {
+    local SPATH
+    SPATH="$( realpath "$0"  2>/dev/null )"
     echo " Disclamer:
     Beware this plugin allows injection of shell code by design!
     Please make sure you have a throughout understanding of auditd and its implementation before using this plugin.
@@ -71,7 +73,7 @@ Examples:
 
 Setup:
     add following to /etc/sudoers or /etc/sudoers.d/nagios
-        nagios ALL=(root:ALL) NOPASSWD:$0
+        nagios ALL=(root:ALL) NOPASSWD:$SPATH
 
 Nagios service if using check_by_ssh:
     define service {
@@ -109,9 +111,6 @@ do
         -F|--checkpointfile) CHECKPOINTFILE="${2:-/tmp/.checkpoint}" ; shift 2 ; continue;;
         -x|--maxage)         MAXCHECKPOINTAGE="${2:-760}"            ; shift 2 ; continue;;
         -C|--nocheckpoint)   NOCHECKPOINT="${2}"             ; shift 2 ; continue;;
-        -f|--file)
-            [[ ! "$2" =~ ^- ]] && FILE=${2:-/tmp/.checkreport}
-            shift 2; continue ;;
         --[a-zA-Z][a-zA-Z=]*) # grab long-options saving opt as hash key and arg as its value
             opt="${1#*--}"
             if [[ ! "$2" =~ ^- ]] ; then # match --key 1,2,3,4
@@ -136,28 +135,33 @@ UNKNOWN='UNKNOWN - '
 STATUS="$OK"
 # Plugin return code
 CODE=0
-# file to save metrics
-FILE=${FILE:-/tmp/.checkreport}
 AUBIN='/usr/sbin/aureport'
 CHECKPOINTFILE=${CHECKPOINTFILE:-/tmp/.checkpoint}
 MAXCHECKPOINTAGE=${MAXCHECKPOINTAGE:-760}
 
 
-if [[ -z $NOCHECKPOINT && -w ${CHECKPOINTFILE} ]] ; then
-    # save checkpoint age in seconds
+if [[ -f $CHECKPOINTFILE && -w $CHECKPOINTFILE && -z $NOCHECKPOINT ]] ; then
+    # if checkpointfile should be updated
     CHECKPOINTAGE=$(( $(date +%s) - $(awk -F'[=:. ]' '/^output/{print $3}' "${CHECKPOINTFILE}" 2>/dev/null) ))
-    if [[ ${CHECKPOINTAGE} -le ${MAXCHECKPOINTAGE} ]]; then
+    if [[ ${CHECKPOINTAGE} -lt ${MAXCHECKPOINTAGE} ]]; then
         AUSEARCH="/usr/sbin/ausearch -ts checkpoint --checkpoint ${CHECKPOINTFILE}"
-    else
-        recent=$(( $(date +%s) - MAXCHECKPOINTAGE ))
-        # TODO: This might need fixing to support different locales
-        recent=$( date +'%x %H:%M:%S' 2>/dev/null)
-        AUSEARCH="/usr/sbin/ausearch -ts ${recent:-recent} --checkpoint ${CHECKPOINTFILE}"
     fi
+elif [[ ! -f $CHECKPOINTFILE && -z $NOCHECKPOINT ]]; then
+    # if checkpointfile not exitst and should be created
+    # timestamp - maxcheckpointage in seconds
+    recent=$(( $(date +%s) - MAXCHECKPOINTAGE ))
+    # TODO: This might need fixing to support different locales
+    recent=$( date +'%x %H:%M:%S' -d @$recent 2>/dev/null)
+    AUSEARCH="/usr/sbin/ausearch -ts ${recent:-recent} --checkpoint ${CHECKPOINTFILE}"
+elif [[ -z $NOCHECKPOINT && -f $CHECKPOINTFILE && ! -w ${CHECKPOINTFILE} ]] ; then
+    echo "${UNKNOWN}user: $USER can not write to $CHECKPOINTFILE, fix permissions or run $0 as different user"
+    exit 3
 else
+    # if no checkpoint file should be created
     AUSEARCH="/usr/sbin/ausearch -ts ${NOCHECKPOINT:-recent}"
 fi
 
+set -o pipefail
 # save output of aureport as newline delimited 'key value' pairs to $AUREPORT
 # shellcheck disable=2086 # use wordsplitting as a feature
 AUREPORT="$( ${AUSEARCH} --raw ${AUSEARCHARGS} | $AUBIN --summary -i ${auargs} | awk -v'FS=: ' '
@@ -169,16 +173,15 @@ AUREPORT="$( ${AUSEARCH} --raw ${AUSEARCHARGS} | $AUBIN --summary -i ${auargs} |
         print $1,nr}
     END {print "dummy",0}' 2>/dev/null )"
 
-if [[ ${PIPESTATUS[0]} -gt 0 ]]; then
-    echo "$UNKNOWN $AUSEARCH --raw ${AUSEARCHARGS} returned status ${PIPESTATUS[0]}"
-    exit 3
-elif [[ ${PIPESTATUS[1]} -gt 0 ]];then
-    echo "$UNKNOWN $AUBIN --summary -i $auargs returned status ${PIPESTATUS[1]}"
+austatus=$?
+if [[ $austatus -gt 0 ]]; then
+    AUSEARCH="ausearch --raw ${AUSEARCHARGS} | aureport --summary -i ${auargs} | awk ..."
+    echo "$UNKNOWN '$AUSEARCH' returned status $austatus, check stderr, permissions and arguments passed to $0"
     exit 3
 fi
 
 # check nr of running audit rules
-if [[ $USER == root ]]; then
+if [[ $EUID -eq 0 ]]; then
     rules=$( /usr/sbin/auditctl -l 2>/dev/null | grep -c -v '^No rules' 2>/dev/null)
     if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
         AUREPORT="${AUREPORT}
@@ -193,7 +196,7 @@ rules ${rules:-null}"
 else
     # check if audit daemon is running
     if ! pgrep -x -u 0 'auditd' &> /dev/null ; then
-        echo "$CRITICAL auditdaemon not running"
+        echo "$CRITICAL auditdaemon not running, $0 invoked as user: $USER"
         exit $CODE
     fi
 fi
@@ -237,6 +240,7 @@ while read -r key value; do
     if [[ $key == 'events' ]] ; then
         metrics="$key=$value;$warn;$critical;$min;$max ${metrics}" # use pnp4nagios UoM
     else
+        #[[ $key =~ (lost)|(backlog) ]] && value="${value}c" # TODO
         metrics="${metrics} $key=$value;$warn;$critical;$min;$max" # use pnp4nagios UoM
     fi
 
@@ -256,6 +260,7 @@ if [[ -n ${VERBOSE} ]]; then
     echo ;
     # sort by nr of events
     echo -ne "$VERBOSE" | column -t | (read -r; printf "%s\n" "$REPLY"; sort -r -n -k 2)
+    echo -ne "checkpointfileage\t$CHECKPOINTAGE\t0\t0\t0\t$MAXCHECKPOINTAGE\n"
 fi
 [[  -z ${NOMETRICS} ]] && echo "| $metrics" | tr -s '; '
 exit ${CODE}
