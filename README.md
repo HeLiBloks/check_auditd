@@ -36,5 +36,6 @@ therefore the ampersand after `check_auditd`
 
 ## sudoers setup
 Add following to /etc/sudoers or /etc/sudoers.d/nagios
+
     nagios ALL=(root:ALL) NOPASSWD:/usr/lib64/nagios/plugins/check_auditd
 
