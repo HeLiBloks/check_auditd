@@ -1,4 +1,6 @@
 # check_auditd
+[![CodeFactor](https://www.codefactor.io/repository/github/helibloks/check_auditd/badge/main)](https://www.codefactor.io/repository/github/helibloks/check_auditd/overview/main)
+
 nagios plugin for monitoring auditd status and logged events
 
 ```bash
