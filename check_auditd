@@ -43,7 +43,7 @@ Usage: $1 [OPTION]
     -F,--checkpoint <file>          File used to store audit checkpoint, defaults to /tmp/.checkpoint
     -C,--nocheckpoint [<day time>]  Do not create checkpoint file, instead use <day time>,
                                         useful for debugging, see 'man ausearch -ts' for time format, defaults to 'recent'
-    -x,--maxcheckpointage <int>     Max age in seconds after wich checkpoint file is overriden with <int> in seconds.
+    -x,--maxage <int>               Max age in seconds after wich checkpoint file is invalidated <int> in seconds.
                                         this value should be somewhat larger than nagios check_interval, defaults to 800 seconds
     -w,--warn <int>                 Global fall-back value to use if [warn] is not defined
     -c,--critical <int>             Global fall-back value to use if [crit] is not defined
@@ -53,9 +53,9 @@ Usage: $1 [OPTION]
     -h,--help                       Show this message
     --[a-zA-Z]=<warn,crit,min,max>  Options containing a key from the output of '$1 -v'
                                         preceded by comma separated list [warn],[crit],[min],[max]
-    --rules=<warn,crit,min,max>     Number of audit rules as shown by 'auditctl -s'
-    --lost=<warn,crit,min,max>      Number of lost audit events
-    --backlog=<warn,crit,min,max>   Number of audit events in backlog
+    --rules <warn,crit,min,max>     Number of audit rules as shown by 'auditctl -s'
+    --lost <warn,crit,min,max>      Number of lost audit events
+    --backlog <warn,crit,min,max>   Number of audit events in backlog
     -X                              Output xmltable if using '-v'
 
 Examples:
@@ -101,7 +101,7 @@ do
         -h|--help)           usage "$0"                              ; exit 3  ;;
         -v|--verbose)        VERBOSE=1                               ; shift   ; continue;;
         -n|--nometrics)      NOMETRICS=1                             ; shift   ; continue;;
-        -a|--auargs)         auargs="${2}"                           ; shift 2 ; continue;;
+        -a|--auargs)         AUARGS="${2}"                           ; shift 2 ; continue;;
         -A|--ausearchargs)   AUSEARCHARGS="${2}"                     ; shift 2 ; continue;;
         -s|--ignore)         ignore="${2//,/ }"                      ; shift 2 ; continue;;
         -w|--warning)        fallback_warning="${2}"                 ; shift 2 ; continue;;
@@ -109,7 +109,7 @@ do
         -m|--min)            min="${2}"                              ; shift 2 ; continue;;
         -M|--max)            max="${2}"                              ; shift 2 ; continue;;
         -F|--checkpointfile) CHECKPOINTFILE="${2:-/tmp/.checkpoint}" ; shift 2 ; continue;;
-        -x|--maxage)         MAXCHECKPOINTAGE="${2:-760}"            ; shift 2 ; continue;;
+        -x|--maxage)         MAXCHECKPOINTAGE="${2}"                 ; shift 2 ; continue;;
         -C|--nocheckpoint)   NOCHECKPOINT="${2}"             ; shift 2 ; continue;;
         --[a-zA-Z][a-zA-Z=]*) # grab long-options saving opt as hash key and arg as its value
             opt="${1#*--}"
@@ -138,38 +138,40 @@ CODE=0
 AUBIN='/usr/sbin/aureport'
 CHECKPOINTFILE=${CHECKPOINTFILE:-/tmp/.checkpoint}
 MAXCHECKPOINTAGE=${MAXCHECKPOINTAGE:-760}
+CHECKPOINTAGE=0
 
-
-if [[ -f $CHECKPOINTFILE && -w $CHECKPOINTFILE && -z $NOCHECKPOINT ]] ; then
+if [[ -z $NOCHECKPOINT && -f $CHECKPOINTFILE && -w $CHECKPOINTFILE ]] ; then
     # if checkpointfile is writable and should be updated
     CHECKPOINTAGE=$(( $(date +%s) - $(awk -F'[=:. ]' '/^output/{print $3}' "${CHECKPOINTFILE}" 2>/dev/null) ))
     if [[ ${CHECKPOINTAGE} -lt ${MAXCHECKPOINTAGE} ]]; then
-        AUSEARCH="/usr/sbin/ausearch -ts checkpoint --checkpoint ${CHECKPOINTFILE}"
+        AUSEARCH="/usr/sbin/ausearch --raw ${AUSEARCHARGS} -ts checkpoint --checkpoint ${CHECKPOINTFILE}"
     else
+        # delete checkpointfile to avoid error
+        rm -f "$CHECKPOINTFILE"  &> /dev/null
         recent=$(( $(date +%s) - MAXCHECKPOINTAGE ))
         # TODO: This might need fixing to support different locales
         recent=$( date +'%x %H:%M:%S' -d @$recent 2>/dev/null)
-        AUSEARCH="/usr/sbin/ausearch -ts ${recent:-recent} --checkpoint ${CHECKPOINTFILE}"
+        AUSEARCH="/usr/sbin/ausearch --raw ${AUSEARCHARGS} -ts ${recent:-recent} --checkpoint ${CHECKPOINTFILE}"
     fi
 elif [[ ! -f $CHECKPOINTFILE && -z $NOCHECKPOINT ]]; then
     # if checkpointfile not exitst and should be created
     # timestamp - maxcheckpointage in seconds
     recent=$(( $(date +%s) - MAXCHECKPOINTAGE ))
     # TODO: This might need fixing to support different locales
-    recent=$( date +'%x %H:%M:%S' -d @$recent 2>/dev/null)
-    AUSEARCH="/usr/sbin/ausearch -ts ${recent:-recent} --checkpoint ${CHECKPOINTFILE}"
+    recent=$( date +'%x %H:%M:%S' -d @${recent} 2>/dev/null)
+    AUSEARCH="/usr/sbin/ausearch --raw ${AUSEARCHARGS} -ts ${recent:-recent} --checkpoint ${CHECKPOINTFILE}"
 elif [[ -z $NOCHECKPOINT && -f $CHECKPOINTFILE && ! -w ${CHECKPOINTFILE} ]] ; then
     echo "${UNKNOWN}user: $USER can not write to $CHECKPOINTFILE, fix permissions or run $0 as different user"
     exit 3
 else
     # if no checkpoint file should be created
-    AUSEARCH="/usr/sbin/ausearch -ts ${NOCHECKPOINT:-recent}"
+    AUSEARCH="/usr/sbin/ausearch --raw ${AUSEARCHARGS} -ts ${NOCHECKPOINT:-recent}"
 fi
 
 set -o pipefail
 # save output of aureport as newline delimited 'key value' pairs to $AUREPORT
 # shellcheck disable=2086 # use wordsplitting as a feature
-AUREPORT="$( ${AUSEARCH} --raw ${AUSEARCHARGS} | $AUBIN --summary -i ${auargs} | awk -v'FS=: ' '
+AUREPORT="$( ${AUSEARCH}  | $AUBIN --summary -i ${AUARGS} | awk -v'FS=: ' '
      /^[0-9]/ && /[0-9a-zA-Z]$/ {split($0,values,/\s+/);
         print values[2],values[1]  }
     /^Number of/ { nr=$2; FS=": "
@@ -180,14 +182,14 @@ AUREPORT="$( ${AUSEARCH} --raw ${AUSEARCHARGS} | $AUBIN --summary -i ${auargs} |
 
 austatus=$?
 if [[ $austatus -gt 0 ]]; then
-    AUSEARCH="ausearch --raw ${AUSEARCHARGS} \\| aureport --summary -i ${auargs} \\| awk ..."
+    AUSEARCH="$AUSEARCH --raw ${AUSEARCHARGS} \| aureport --summary -i ${AUARGS} \| awk ..."
     echo "$UNKNOWN '$AUSEARCH' returned status $austatus, check stderr, permissions and arguments passed to $0"
     exit 3
 fi
 
 # check nr of running audit rules
 if [[ $EUID -eq 0 ]]; then
-    rules=$( /usr/sbin/auditctl -l 2>/dev/null | grep -c -v '^No rules' 2>/dev/null)
+    rules=$( /usr/sbin/auditctl -l 2>/dev/null | grep -c -v '^No rules' 2>/dev/null )
     if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
         AUREPORT="${AUREPORT}
 rules ${rules:-null}"
@@ -196,15 +198,20 @@ rules ${rules:-null}"
     # check audit daemon status, metrics
     while read -r key value; do
         AUREPORT="${AUREPORT}
-    $key $value"
+$key $value"
     done <<< "$(/usr/sbin/auditctl -s 2>/dev/null | awk '/^(pid|lost|backlog)\s[0-9]+$/ {print $1,$2}' 2>/dev/null)"
 else
-    # check if audit daemon is running
+    # fallback check if audit daemon is running
     if ! pgrep -x -u 0 'auditd' &> /dev/null ; then
         echo "$CRITICAL auditdaemon not running, $0 invoked as user: $USER"
-        exit $CODE
+        exit 1
     fi
 fi
+
+# set checkpoint age
+AUREPORT="$AUREPORT
+checkpointfileage ${CHECKPOINTAGE:-0}"
+[[ -z ${opthash['checkpointfileage']} ]] && opthash['checkpointfileage']=",,0,$MAXCHECKPOINTAGE"
 
 # dummy value to guard against empty result sets
 ignore="$ignore dummy"
@@ -224,10 +231,10 @@ while read -r key value; do
     elif [[ $key == 'pid' && $value -le 0 ]]; then
         STATUS="$CRITICAL audit daemon not running "
         CODE=2
-        sign='!'
+        sign='!!'
     fi
 
-    if [[ -n $critical && $value -ge ${critical:-$fallback_critical}  ]] ; then
+    [[ $key != 'checkpointfileage' ]] && if [[ -n $critical && $value -ge ${critical:-$fallback_critical} ]] ; then
         STATUS="$CRITICAL"
         CODE=2
         sign='!!' # prepend critical metrics with !!
@@ -242,17 +249,17 @@ while read -r key value; do
         sign='?' # prepend to not sane metrics
     fi
 
-    if [[ $key == 'events' ]] ; then
+    if [[ $key == 'events' ]] ; then # prepend 'event'
         metrics="$key=$value;$warn;$critical;$min;$max ${metrics}" # use pnp4nagios UoM
     else
         #[[ $key =~ (lost)|(backlog) ]] && value="${value}c" # TODO
         metrics="${metrics} $key=$value;$warn;$critical;$min;$max" # use pnp4nagios UoM
     fi
 
-    if [[ $sign =~ '!' ]] ; then
+    if [[ $sign =~ '!' && $key != 'checkpointfileage' || $key == 'events' ]] ; then # show critical and warnings first
         shortmetrics="$key=${value}${sign} ${shortmetrics}" # show after status OK - shortmetrics...
     else
-        [[ $value -gt 0 ]] && shortmetrics="${shortmetrics} $key=${value}" # show after status OK - shortmetrics...
+        [[ $value -gt 0 && $key != 'checkpointfileage'  ]] && shortmetrics="${shortmetrics} $key=${value}" # show after status OK - shortmetrics...
     fi
     [[ -n $VERBOSE ]]  && VERBOSE="${VERBOSE}${key}\t${value}\t$warn\t$critical\t$min\t$max\n"
 done <<< "${AUREPORT}"
@@ -261,12 +268,11 @@ done <<< "${AUREPORT}"
 # output: OK - metric=value ...
 echo -n "${STATUS}$shortmetrics" | tr -s ' '
 if [[ -n ${VERBOSE} ]]; then
-    [[ -n  $xml ]] && xml="| xmltable"
+    [[ -n $xml ]] && xmltable="| xmltable"
     echo ;
     # sort by nr of events
-    echo -ne "$VERBOSE" | column -t | (read -r; printf "%s\n" "$REPLY"; sort -r -n -k 2)
-    echo -ne "checkpointfileage\t$CHECKPOINTAGE\t0\t0\t0\t$MAXCHECKPOINTAGE\n"
+    echo -ne "$VERBOSE" |  column -t -o ' ' | (read -r; printf "%s\n" "$REPLY"; sort -r -n -k 2 ${xmltable})
 fi
-[[  -z ${NOMETRICS} ]] && echo "| $metrics" | tr -s '; '
+[[  -z ${NOMETRICS} ]] && echo "| $metrics" | sed -r -e 's/\;+\s/ /g'
 exit ${CODE}
 
