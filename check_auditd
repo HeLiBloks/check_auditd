@@ -21,9 +21,9 @@
 
 xmltable(){
     local iter=1
-    local table='<table style="width:100%">'
+    local table='<table>'
     while read -r key value warn critical min max; do
-        [[ $iter -eq 1 ]] && table="${table}<tr><th>$key</th><th>$value</th><th>$warn</th><th>$critical</th><th>$min</th><th>$max</th></tr>"
+        [[ $iter -eq 1 ]] && table="${table}<tr><th align='left'>$key</th><th align='left'>$value</th><th align='left'>$warn</th><th align='left'>$critical</th><th align='left'>$min</th><th align='left'>$max</th></tr>"
         [[ $iter -gt 1 ]] && table="${table}<tr><td>$key</td><td>$value</td><td>${warn}</td><td>$critical</td><td>$min</td><td>$max</td>"
         ((iter+=1))
     done
@@ -38,25 +38,25 @@ usage () {
     Please make sure you have a throughout understanding of auditd and its implementation before using this plugin.
 
 Usage: $1 [OPTION]
-    -a,--auargs <arg1,arg2,...>     Extra arguments passed on to aureport
-    -A,--ausargs <arg1,arg2,...>    Extra arguments passed on to ausearch
-    -F,--checkpoint <file>          File used to store audit checkpoint, defaults to /tmp/.checkpoint
-    -C,--nocheckpoint [<day time>]  Do not create checkpoint file, instead use <day time>,
-                                        useful for debugging, see 'man ausearch -ts' for time format, defaults to 'recent'
-    -x,--maxage <int>               Max age in seconds after wich checkpoint file is invalidated <int> in seconds.
-                                        this value should be somewhat larger than nagios check_interval, defaults to 800 seconds
-    -w,--warn <int>                 Global fall-back value to use if [warn] is not defined
-    -c,--critical <int>             Global fall-back value to use if [crit] is not defined
-    -s,--ignore <metric1,metric2,..>   comma-separated list of items or bash-regex to ignore
-    -n,--nometrics                     disable metrics in output, useful if not using pnp4nagios
-    -v,--verbose                    Show metrics more verbosely in a list
-    -h,--help                       Show this message
-    --[a-zA-Z]=<warn,crit,min,max>  Options containing a key from the output of '$1 -v'
-                                        preceded by comma separated list [warn],[crit],[min],[max]
-    --rules <warn,crit,min,max>     Number of audit rules as shown by 'auditctl -s'
-    --lost <warn,crit,min,max>      Number of lost audit events
-    --backlog <warn,crit,min,max>   Number of audit events in backlog
-    -X                              Output xmltable if using '-v'
+    -a,--auargs <arg1,arg2,...>      Extra arguments passed on to aureport
+    -A,--ausargs <arg1,arg2,...>     Extra arguments passed on to ausearch
+    -F,--checkpoint <file>           File used to store audit checkpoint, defaults to /tmp/.checkpoint
+    -C,--nocheckpoint [<day time>]   Do not create checkpoint file, instead use <day time>,
+                                         useful for debugging, see 'man ausearch -ts' for time format, defaults to 'recent'
+    -x,--maxage <int>                Max age in seconds after wich checkpoint file is invalidated <int> in seconds.
+                                         this value should be somewhat larger than nagios check_interval, defaults to 800 seconds
+    -w,--warn <int>                  Global fall-back value to use if [warn] is not defined
+    -c,--critical <int>              Global fall-back value to use if [crit] is not defined
+    -s,--ignore <metric1,metric2,..>    comma-separated list of items or bash-regex to ignore
+    -n,--nometrics                      disable metrics in output, useful if not using pnp4nagios
+    -v,--verbose                     Show metrics more verbosely in a list
+    --[a-zA-Z]=<warn,crit,min,max>   Options containing a key from the output of '$1 -v'
+                                         preceded by comma separated list [warn],[crit],[min],[max]
+    --rules <warn,crit,min,max>      Number of audit rules as shown by 'auditctl -l | wc -l'
+    --lost <warn,crit,min,max>       Number of lost audit events see 'auditctl -s'
+    --backlog <warn,crit,min,max>    Number of audit events in backlog
+    -X                               Output xmltable, if using '-v'. This can be enabled in nagios with
+    -h,--help                        Show this message
 
 Examples:
     Logins and failed logins
@@ -110,7 +110,8 @@ do
         -M|--max)            max="${2}"                              ; shift 2 ; continue;;
         -F|--checkpointfile) CHECKPOINTFILE="${2:-/tmp/.checkpoint}" ; shift 2 ; continue;;
         -x|--maxage)         MAXCHECKPOINTAGE="${2}"                 ; shift 2 ; continue;;
-        -C|--nocheckpoint)   NOCHECKPOINT="${2}"             ; shift 2 ; continue;;
+        -X|--xmltable)       xmltable="1"                            ; shift 1 ; continue;;
+        -C|--nocheckpoint)   NOCHECKPOINT="${2}"                     ; shift 2 ; continue;;
         --[a-zA-Z][a-zA-Z=]*) # grab long-options saving opt as hash key and arg as its value
             opt="${1#*--}"
             if [[ ! "$2" =~ ^- ]] ; then # match --key 1,2,3,4
@@ -268,10 +269,14 @@ done <<< "${AUREPORT}"
 # output: OK - metric=value ...
 echo -n "${STATUS}$shortmetrics" | tr -s ' '
 if [[ -n ${VERBOSE} ]]; then
-    [[ -n $xml ]] && xmltable="| xmltable"
+    if [[ -n $xmltable ]] ; then
+        xmltable="xmltable"
+    else
+        xmltable="cat"
+    fi
     echo ;
     # sort by nr of events
-    echo -ne "$VERBOSE" |  column -t -o ' ' | (read -r; printf "%s\n" "$REPLY"; sort -r -n -k 2 ${xmltable})
+    echo -ne "$VERBOSE" |  column -t -o ' ' | (read -r; printf "%s\n" "$REPLY"; sort -r -n -k 2 ) | ${xmltable}
 fi
 [[  -z ${NOMETRICS} ]] && echo "| $metrics" | sed -r -e 's/\;+\s/ /g'
 exit ${CODE}
