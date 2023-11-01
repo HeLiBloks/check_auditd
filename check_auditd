@@ -17,7 +17,7 @@
 #
 # Check for anomaly's, failed logins, systemcalls and more return the data suitable for pnp4nagios
 #
-# tested on Centos7,8, Fedora33
+# tested on Centos7,8, Fedora33, Fedora39
 
 xmltable(){
     local iter=1
