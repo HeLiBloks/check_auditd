@@ -1,0 +1,37 @@
+---
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up auditd
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y auditd
+          sudo systemctl start auditd
+          sudo systemctl enable auditd
+
+      - name: Run check_auditd script tests
+        run: |
+          chmod +x ./check_auditd
+          bash -n ./check_auditd
+          ./check_auditd --help
+
+      - name: Run additional tests
+        run: |
+          ./check_auditd --logins=200,300,0,1000 -v
+          ./check_auditd --failedlogins=2,1,0,10 --failedauthentications=10,14,0 -v --ignore faileddogs,failedhounds
+          ./check_auditd -a '--auth --failed' -v -n
+          ./check_auditd -a '--comm --failed' -A '-x ' -v -n
+          ./check_auditd -a '-s --failed' -v -n
