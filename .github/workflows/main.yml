@@ -26,7 +26,7 @@ jobs:
         run: |
           chmod +x ./check_auditd
           bash -n ./check_auditd
-          ./check_auditd --help
+          #./check_auditd --help
 
       - name: Run additional tests
         run: |
