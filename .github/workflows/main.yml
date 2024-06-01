@@ -10,26 +10,30 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: rockylinux/rockylinux:9
+      # TODO: add containers
+      # container:
+      # image: rockylinux/rockylinux:9
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
 
       - name: lint
         run: |
-          echo 'TODO:'
-          dnf install -y shellcheck
+          apt update -y
+          apt install -y shellcheck
           shellcheck ./check_auditd
-          # systemctl start auditd
-          # systemctl enable auditd
 
-      - name: Run check_auditd script tests
+      - name: Syntax check with bash -n
         run: |
           chmod +x ./check_auditd
           bash -n ./check_auditd
-          #./check_auditd --help
-#
+
+      # - name: TODO: run the script, figure out how to make this work
+        # run: |
+          # systemctl start auditd
+          # systemctl enable auditd
+          # ./check_auditd --help
+
       # - name: Run additional tests
         # run: |
           # ./check_auditd --logins=200,300,0,1000 -v
