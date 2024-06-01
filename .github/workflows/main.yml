@@ -19,8 +19,8 @@ jobs:
 
       - name: lint
         run: |
-          apt update -y
-          apt install -y shellcheck
+          sudo apt update -y
+          sudo apt install -y shellcheck
           shellcheck ./check_auditd
 
       - name: Syntax check with bash -n
