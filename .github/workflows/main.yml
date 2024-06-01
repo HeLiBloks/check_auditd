@@ -18,7 +18,7 @@ jobs:
 
       - name: Set up auditd
         run: |
-          dnf install -y auditd
+          dnf install -y audit
           systemctl start auditd
           systemctl enable auditd
 
