@@ -10,15 +10,15 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    container:
+      image: rockylinux/rockylinux:9
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
 
       - name: Set up auditd
         run: |
-          sudo apt-get update
-          sudo apt-get install -y auditd
+          sudo dnf install -y auditd
           sudo systemctl start auditd
           sudo systemctl enable auditd
 
@@ -30,8 +30,8 @@ jobs:
 
       - name: Run additional tests
         run: |
-          ./check_auditd --logins=200,300,0,1000 -v
-          ./check_auditd --failedlogins=2,1,0,10 --failedauthentications=10,14,0 -v --ignore faileddogs,failedhounds
-          ./check_auditd -a '--auth --failed' -v -n
-          ./check_auditd -a '--comm --failed' -A '-x ' -v -n
-          ./check_auditd -a '-s --failed' -v -n
+          sudo ./check_auditd --logins=200,300,0,1000 -v
+          sudo ./check_auditd --failedlogins=2,1,0,10 --failedauthentications=10,14,0 -v --ignore faileddogs,failedhounds
+          sudo ./check_auditd -a '--auth --failed' -v -n
+          sudo ./check_auditd -a '--comm --failed' -A '-x ' -v -n
+          sudo ./check_auditd -a '-s --failed' -v -n
