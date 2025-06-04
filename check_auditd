@@ -227,7 +227,7 @@ while read -r key value; do
 
     # TODO: move this out of the loop
     if [[ $key == 'rules' && $value -le 0 ]]; then
-        STATUS="$WARNING no configured audit rules "
+        STATUS="$WARN no configured audit rules "
         CODE=1
         sign='!'
     elif [[ $key == 'pid' && $value -le 0 ]]; then
