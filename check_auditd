@@ -204,7 +204,7 @@ $key $value"
     done <<< "$(/usr/sbin/auditctl -s 2>/dev/null | awk '/^(pid|lost|backlog)\s[0-9]+$/ {print $1,$2}' 2>/dev/null)"
 else
     # fallback check if audit daemon is running
-    if ! grep -P -x -u 0 'auditd' &> /dev/null ; then
+    if ! pgrep -u 0 'auditd' &> /dev/null ; then
         echo "$CRITICAL auditdaemon not running, $0 invoked as user: $USER"
         exit 1
     fi
