@@ -40,7 +40,7 @@ usage () {
 
 Usage: $1 [OPTION]
     -a,--auargs <arg1,arg2,...>      Extra arguments passed on to aureport
-    -A,--ausargs <arg1,arg2,...>     Extra arguments passed on to ausearch
+    -A,--ausearchargs <arg1,arg2,...>     Extra arguments passed on to ausearch
     -F,--checkpoint <file>           File used to store audit checkpoint, defaults to /tmp/.checkpoint
     -C,--nocheckpoint [<day time>]   Do not create checkpoint file, instead use <day time>,
                                          useful for debugging, see 'man ausearch -ts' for time format, defaults to 'recent'
