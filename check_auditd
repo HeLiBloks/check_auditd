@@ -34,9 +34,9 @@ xmltable(){
 usage () {
     local SPATH
     SPATH="$( realpath "$0"  2>/dev/null )"
-    echo " Disclamer:
+    echo " Disclaimer:
     Beware this plugin allows injection of shell code by design!
-    Please make sure you have a throughout understanding of auditd and its implementation before using this plugin.
+    Please make sure you have a thorough understanding of auditd and its implementation before using this plugin.
 
 Usage: $1 [OPTION]
     -a,--auargs <arg1,arg2,...>      Extra arguments passed on to aureport
@@ -44,7 +44,7 @@ Usage: $1 [OPTION]
     -F,--checkpoint <file>           File used to store audit checkpoint, defaults to /tmp/.checkpoint
     -C,--nocheckpoint [<day time>]   Do not create checkpoint file, instead use <day time>,
                                          useful for debugging, see 'man ausearch -ts' for time format, defaults to 'recent'
-    -x,--maxage <int>                Max age in seconds after wich checkpoint file is invalidated <int> in seconds.
+    -x,--maxage <int>                Max age in seconds after which checkpoint file is invalidated <int> in seconds.
                                          this value should be somewhat larger than nagios check_interval, defaults to 800 seconds
     -w,--warn <int>                  Global fall-back value to use if [warn] is not defined
     -c,--critical <int>              Global fall-back value to use if [crit] is not defined
