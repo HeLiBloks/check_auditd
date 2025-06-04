@@ -28,6 +28,10 @@ jobs:
           chmod +x ./check_auditd
           bash -n ./check_auditd
 
+      - name: Verify check_auditd help
+        run: |
+          ./check_auditd --help
+
       # - name: TODO: run the script, figure out how to make this work
         # run: |
           # systemctl start auditd
