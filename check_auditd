@@ -20,12 +20,28 @@
 # tested on Centos7,8, Fedora33, Fedora39
 
 # shellcheck disable=SC2317
+xml_escape() {
+    local s=$1
+    s=${s//&/&amp;}
+    s=${s//</&lt;}
+    s=${s//>/&gt;}
+    s=${s//\"/&quot;}
+    s=${s//\'/&apos;}
+    printf '%s' "$s"
+}
+
 xmltable(){
     local iter=1
     local table='<table>'
     while read -r key value warn critical min max; do
+        key=$(xml_escape "$key")
+        value=$(xml_escape "$value")
+        warn=$(xml_escape "$warn")
+        critical=$(xml_escape "$critical")
+        min=$(xml_escape "$min")
+        max=$(xml_escape "$max")
         [[ $iter -eq 1 ]] && table="${table}<tr><th align='left'>$key</th><th align='left'>$value</th><th align='left'>$warn</th><th align='left'>$critical</th><th align='left'>$min</th><th align='left'>$max</th></tr>"
-        [[ $iter -gt 1 ]] && table="${table}<tr><td>$key</td><td>$value</td><td>${warn}</td><td>$critical</td><td>$min</td><td>$max</td>"
+        [[ $iter -gt 1 ]] && table="${table}<tr><td>$key</td><td>$value</td><td>${warn}</td><td>$critical</td><td>$min</td><td>$max</td></tr>"
         ((iter+=1))
     done
     echo "$table</table>"
@@ -40,15 +56,17 @@ usage () {
 
 Usage: $1 [OPTION]
     -a,--auargs <arg1,arg2,...>      Extra arguments passed on to aureport
-    -A,--ausearchargs <arg1,arg2,...>     Extra arguments passed on to ausearch
-    -F,--checkpoint <file>           File used to store audit checkpoint, defaults to /tmp/.checkpoint
+    -A,--ausargs,--ausearchargs <arg1,arg2,...>  Extra arguments passed on to ausearch
+    -F,--checkpoint,--checkpointfile <file>  File used to store audit checkpoint, defaults to /tmp/.checkpoint
     -C,--nocheckpoint [<day time>]   Do not create checkpoint file, instead use <day time>,
                                          useful for debugging, see 'man ausearch -ts' for time format, defaults to 'recent'
     -x,--maxage <int>                Max age in seconds after which checkpoint file is invalidated <int> in seconds.
                                          this value should be somewhat larger than nagios check_interval, defaults to 800 seconds
-    -w,--warn <int>                  Global fall-back value to use if [warn] is not defined
+    -w,--warn,--warning <int>        Global fall-back value to use if [warn] is not defined
     -c,--critical <int>              Global fall-back value to use if [crit] is not defined
-    -s,--ignore <metric1,metric2,..>    comma-separated list of items or bash-regex to ignore
+    -m,--min <int>                   Global fall-back min value to use if [min] is not defined
+    -M,--max <int>                   Global fall-back max value to use if [max] is not defined
+    -s,--ignore <metric1,metric2,..> comma-separated list of items or regex patterns to ignore
     -n,--nometrics                      disable metrics in output, useful if not using pnp4nagios
     -v,--verbose                     Show metrics more verbosely in a list
     --[a-zA-Z]=<warn,crit,min,max>   Options containing a key from the output of '$1 -v'
@@ -91,34 +109,37 @@ Nagios service if using check_by_ssh:
 
 # declare hash to keep commandline values in
 declare -A opthash=();
-# ensure that we dont loop infinitly
-guard=30
-# remove equal signs from $@
-#@="${@//=/ }"
-while [[ $guard -gt 0 ]]
-do
-    ((guard-=1))
-    case "${1}" in
-        -h|--help)           usage "$0"                              ; exit 3  ;;
-        -v|--verbose)        VERBOSE=1                               ; shift   ; continue;;
-        -n|--nometrics)      NOMETRICS=1                             ; shift   ; continue;;
-        -a|--auargs)         AUARGS="${2}"                           ; shift 2 ; continue;;
-        -A|--ausearchargs)   AUSEARCHARGS="${2}"                     ; shift 2 ; continue;;
-        -s|--ignore)         ignore="${2//,/ }"                      ; shift 2 ; continue;;
-        -w|--warning)        fallback_warning="${2}"                 ; shift 2 ; continue;;
-        -c|--critical)       fallback_critical="${2}"                ; shift 2 ; continue;;
-        -m|--min)            min="${2}"                              ; shift 2 ; continue;;
-        -M|--max)            max="${2}"                              ; shift 2 ; continue;;
-        -F|--checkpointfile) CHECKPOINTFILE="${2:-/tmp/.checkpoint}" ; shift 2 ; continue;;
-        -x|--maxage)         MAXCHECKPOINTAGE="${2}"                 ; shift 2 ; continue;;
-        -X|--xmltable)       xmltable="1"                            ; shift 1 ; continue;;
-        -C|--nocheckpoint)   NOCHECKPOINT="${2}"                     ; shift 2 ; continue;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)               usage "$0"                              ; exit 3  ;;
+        -v|--verbose)            VERBOSE=1                               ; shift   ; continue;;
+        -n|--nometrics)          NOMETRICS=1                             ; shift   ; continue;;
+        -a|--auargs)             AUARGS="${2}"                           ; shift 2 ; continue;;
+        -A|--ausargs|--ausearchargs) AUSEARCHARGS="${2}"                 ; shift 2 ; continue;;
+        -s|--ignore)             ignore="${2}"                           ; shift 2 ; continue;;
+        -w|--warn|--warning)     fallback_warning="${2}"                 ; shift 2 ; continue;;
+        -c|--critical)           fallback_critical="${2}"                ; shift 2 ; continue;;
+        -m|--min)                min="${2}"                              ; shift 2 ; continue;;
+        -M|--max)                max="${2}"                              ; shift 2 ; continue;;
+        -F|--checkpoint|--checkpointfile) CHECKPOINTFILE="${2:-/tmp/.checkpoint}" ; shift 2 ; continue;;
+        -x|--maxage)             MAXCHECKPOINTAGE="${2}"                 ; shift 2 ; continue;;
+        -X|--xmltable)           xmltable="1"                            ; shift   ; continue;;
+        -C|--nocheckpoint)
+            if [[ -n $2 && ! $2 =~ ^- ]]; then
+                NOCHECKPOINT="$2"
+                shift 2
+            else
+                NOCHECKPOINT="recent"
+                shift 1
+            fi
+            continue
+            ;;
         --[a-zA-Z][a-zA-Z=]*) # grab long-options saving opt as hash key and arg as its value
             opt="${1#*--}"
-            if [[ ! "$2" =~ ^- ]] ; then # match --key 1,2,3,4
+            if [[ -n $2 && ! "$2" =~ ^- ]] ; then # match --key 1,2,3,4
                 opthash[$opt]="${2//[^0-9csBuTMKGm%.]/,}"
                 shift 2; continue
-            elif [[ "$2" =~ ^- ]] ; then # this should match --key=1,2,3,4
+            else # this should match --key=1,2,3,4
                 value="${opt#*=}"
                 opthash[${opt%%=*}]="${value//[^0-9csBuTMKGm%.]/,}"
                 shift 1; continue
@@ -216,14 +237,26 @@ checkpointfileage ${CHECKPOINTAGE:-0}"
 [[ -z ${opthash['checkpointfileage']} ]] && opthash['checkpointfileage']=",,0,$MAXCHECKPOINTAGE"
 
 # dummy value to guard against empty result sets
-ignore="$ignore dummy"
+ignore="$ignore,dummy"
+
+is_ignored() {
+    local key=$1
+    local pattern
+    IFS=',' read -r -a _ignore_patterns <<< "$ignore"
+    for pattern in "${_ignore_patterns[@]}"; do
+        [[ -z $pattern ]] && continue
+        [[ $key =~ $pattern ]] && return 0
+    done
+    return 1
+}
 
 # read key value pairs separated by space one line at a time
 while read -r key value; do
     sign=''
     IFS=',' read -r warn critical min max <<< "${opthash[$key]}"
     # shellcheck disable=2199 disable=2076
-    [[ $key == 'dummy' || " ${ignore[*]} " =~ " $key "  ]] && continue # avoid fail if input is empty or in ignore list
+    [[ $key == 'dummy' ]] && continue # avoid fail if input is empty
+    is_ignored "$key" && continue
 
     # TODO: move this out of the loop
     if [[ $key == 'rules' && $value -le 0 ]]; then
@@ -236,6 +269,7 @@ while read -r key value; do
         sign='!!'
     fi
 
+    [[ -z $value ]] && value=0
     [[ $key != 'checkpointfileage' ]] && if [[ -n $critical && $value -ge ${critical:-$fallback_critical} ]] ; then
         STATUS="$CRITICAL"
         CODE=2
@@ -244,7 +278,7 @@ while read -r key value; do
         STATUS="$WARN"
         CODE=1
         sign='!' # prepend warning metrics with !
-    elif [[ -z $value || $value -lt 0 ]] ; then
+    elif [[ $value -lt 0 ]] ; then
         STATUS="$UNKNOWN metric out of bounds: "
         value='null'
         CODE=3
@@ -281,4 +315,3 @@ if [[ -n ${VERBOSE} ]]; then
 fi
 [[  -z ${NOMETRICS} ]] && echo "| $metrics" | sed -r -e 's/\;+\s/ /g'
 exit ${CODE}
-

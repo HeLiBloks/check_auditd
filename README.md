@@ -12,6 +12,24 @@ bash-4.2$ ./check_auditd --failedlogins 3,5 --anomalyevents 1,2 --events 280,300
 This plugin uses ausearch, aureport to parse the auditd daemon logs and
 auditctl for daemon status.
 
+## options
+Short and long flags are interchangeable where shown.
+
+- `-h, --help` show usage
+- `-v, --verbose` list metrics in a table
+- `-n, --nometrics` disable perfdata output
+- `-a, --auargs <arg1,arg2,...>` extra arguments passed to `aureport`
+- `-A, --ausargs, --ausearchargs <arg1,arg2,...>` extra arguments passed to `ausearch`
+- `-F, --checkpoint, --checkpointfile <file>` file used to store audit checkpoint (default `/tmp/.checkpoint`)
+- `-C, --nocheckpoint [<day time>]` do not create checkpoint file; optional time uses `ausearch -ts` syntax (default `recent`)
+- `-x, --maxage <int>` max age in seconds before the checkpoint file is invalidated
+- `-w, --warn, --warning <int>` global fallback warn value when per-metric warn is not set
+- `-c, --critical <int>` global fallback critical value when per-metric critical is not set
+- `-m, --min <int>` global fallback min value when per-metric min is not set
+- `-M, --max <int>` global fallback max value when per-metric max is not set
+- `-s, --ignore <metric1,metric2,..>` comma-separated list of regex patterns to ignore
+- `--[a-zA-Z]=<warn,crit,min,max>` per-metric thresholds using keys from `check_auditd -v`
+
 
 ## nagios service configuration
 ### service config if using `check_by_ssh`
@@ -40,4 +58,3 @@ therefore the ampersand after `check_auditd`
 Add following to /etc/sudoers or /etc/sudoers.d/nagios
 
     nagios ALL=(root:ALL) NOPASSWD:/usr/lib64/nagios/plugins/check_auditd
-
